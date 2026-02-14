@@ -1,0 +1,259 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  supabaseUserId  String   @unique
+  name            String?
+  heightInches    Int?     // stored in inches (5'9" = 69)
+  startWeight     Float?
+  goalWeight      Float?
+  caloricTarget   Int?     @default(2874)
+  proteinTarget   Int?     @default(305)
+  carbTarget      Int?     @default(207)
+  fatTarget       Int?     @default(83)
+  timezone        String   @default("America/New_York")
+  trainingDays    Int[]    @default([1, 2, 3, 4, 5]) // 0=Sun, 1=Mon...
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  weightEntries    WeightEntry[]
+  nutritionDays    NutritionDay[]
+  savedFoods       SavedFood[]
+  savedMeals       SavedMeal[]
+  workoutPlans     WorkoutPlan[]
+  workoutSessions  WorkoutSession[]
+  mobilityLogs     MobilityLog[]
+  dailyLogs        DailyLog[]
+  progressPhotos   ProgressPhoto[]
+}
+
+// ─── WEIGHT TRACKING ───
+
+enum WeighInStatus {
+  BASELINE
+  FASTING
+  NORMAL
+}
+
+model WeightEntry {
+  id             String        @id @default(cuid())
+  userId         String
+  date           DateTime      @db.Date
+  weight         Float         // lbs, 1 decimal
+  bodyFatPercent  Float?       // optional
+  status         WeighInStatus @default(NORMAL)
+  timeOfDay      String?       // "morning", "evening", etc.
+  notes          String?
+  createdAt      DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+// ─── NUTRITION TRACKING ───
+
+model NutritionDay {
+  id      String   @id @default(cuid())
+  userId  String
+  date    DateTime @db.Date
+
+  entries NutritionEntry[]
+  user    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model NutritionEntry {
+  id              String @id @default(cuid())
+  nutritionDayId  String
+  mealLabel       String // "Meal 1", "Meal 2", "Snack", or custom
+  foodName        String
+  calories        Float  @default(0)
+  protein         Float  @default(0)
+  carbs           Float  @default(0)
+  fat             Float  @default(0)
+  servingSize     String? // "258g", "1 cup", etc.
+  sortOrder       Int    @default(0)
+  createdAt       DateTime @default(now())
+
+  nutritionDay NutritionDay @relation(fields: [nutritionDayId], references: [id], onDelete: Cascade)
+
+  @@index([nutritionDayId])
+}
+
+model SavedFood {
+  id          String @id @default(cuid())
+  userId      String
+  name        String
+  calories    Float
+  protein     Float
+  carbs       Float
+  fat         Float
+  servingSize String? // "per 100g", "per scoop", etc.
+  createdAt   DateTime @default(now())
+
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  savedMealItems SavedMealItem[]
+
+  @@index([userId])
+}
+
+model SavedMeal {
+  id     String @id @default(cuid())
+  userId String
+  name   String // "Standard Breakfast", etc.
+
+  items SavedMealItem[]
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SavedMealItem {
+  id          String @id @default(cuid())
+  savedMealId String
+  savedFoodId String
+  quantity    Float  @default(1)
+
+  savedMeal SavedMeal @relation(fields: [savedMealId], references: [id], onDelete: Cascade)
+  savedFood SavedFood @relation(fields: [savedFoodId], references: [id], onDelete: Cascade)
+}
+
+// ─── WORKOUT TRACKING ───
+
+model WorkoutPlan {
+  id          String @id @default(cuid())
+  userId      String
+  dayOfWeek   Int    // 1=Monday, 2=Tuesday, ... 5=Friday
+  sessionName String // "Upper A — Horizontal Push/Pull"
+  weekNumber  Int    @default(1)
+  isActive    Boolean @default(true)
+
+  exercises PlanExercise[]
+  sessions  WorkoutSession[]
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dayOfWeek, weekNumber])
+}
+
+model PlanExercise {
+  id             String  @id @default(cuid())
+  workoutPlanId  String
+  exerciseName   String
+  sets           Int
+  reps           String  // "8" or "8-12" or "AMRAP" or "30 sec"
+  tempo          String? // "3-1-1" format
+  restSeconds    Int?
+  targetRPE      String? // "7" or "7-8"
+  cues           String? // coaching notes (can be long)
+  supersetGroup  String? // "A", "B", "C" — exercises with same letter are superset
+  exerciseType   String  @default("WORKING") // WORKING, WARMUP, FINISHER
+  sortOrder      Int     @default(0)
+
+  workoutPlan WorkoutPlan @relation(fields: [workoutPlanId], references: [id], onDelete: Cascade)
+  sessionSets SessionSet[]
+
+  @@index([workoutPlanId])
+}
+
+model WorkoutSession {
+  id            String    @id @default(cuid())
+  userId        String
+  workoutPlanId String?
+  date          DateTime  @db.Date
+  trainingDate  DateTime  @db.Date // resolved training date (noon boundary)
+  startTime     DateTime?
+  endTime       DateTime?
+  notes         String?
+  weekNumber    Int       @default(1)
+  completed     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  sets         SessionSet[]
+  workoutPlan  WorkoutPlan? @relation(fields: [workoutPlanId], references: [id])
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, trainingDate])
+}
+
+model SessionSet {
+  id                String  @id @default(cuid())
+  workoutSessionId  String
+  planExerciseId    String?
+  exerciseName      String  // denormalized for history queries
+  setNumber         Int
+  weightUsed        Float?  // lbs
+  repsCompleted     Int?
+  actualRPE         Int?    // 5-10
+  duration          Int?    // seconds (for timed sets)
+  isAMRAP           Boolean @default(false)
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  workoutSession WorkoutSession @relation(fields: [workoutSessionId], references: [id], onDelete: Cascade)
+  planExercise   PlanExercise?  @relation(fields: [planExerciseId], references: [id])
+
+  @@index([workoutSessionId])
+  @@index([exerciseName])
+}
+
+// ─── MOBILITY TRACKING ───
+
+model MobilityLog {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime @db.Date
+  type      String   // "PRE_WORKOUT" or "POST_WORKOUT"
+  version   String   // "A" (normal) or "B" (sore/stiff)
+  completed Boolean  @default(false)
+  notes     String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+// ─── DAILY LOG (sleep, mood, steps) ───
+
+model DailyLog {
+  id         String   @id @default(cuid())
+  userId     String
+  date       DateTime @db.Date
+  sleepHours Float?
+  moodRating Int?     // 1-10
+  steps      Int?
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// ─── PROGRESS PHOTOS ───
+
+model ProgressPhoto {
+  id       String   @id @default(cuid())
+  userId   String
+  date     DateTime @db.Date
+  imageUrl String
+  notes    String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
