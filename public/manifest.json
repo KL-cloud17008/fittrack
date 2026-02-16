@@ -1,6 +1,6 @@
 {
-  "name": "FitTrack",
-  "short_name": "FitTrack",
+  "name": "Metabolic RW",
+  "short_name": "Metabolic RW",
   "description": "Personal fitness tracking PWA",
   "start_url": "/",
   "display": "standalone",

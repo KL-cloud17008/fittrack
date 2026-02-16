@@ -15,13 +15,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FitTrack",
+  title: "Metabolic RW",
   description: "Personal fitness tracking PWA",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "FitTrack",
+    title: "Metabolic RW",
   },
 };
 
