@@ -4,30 +4,101 @@ import {
   Dumbbell,
   Apple,
   TrendingDown,
-  Calendar,
+  TrendingUp,
+  Minus,
   Moon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { createClient } from "@/lib/supabase-server";
+import { prisma } from "@/lib/db";
+import { getWeightEntries } from "@/actions/weight";
+import { computeWeightStats } from "@/lib/weight";
+import { DashboardWeightChart } from "@/components/dashboard/DashboardWeightChart";
 
-const days = ["S", "M", "T", "W", "T", "F", "S"] as const;
+export default async function DashboardPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export default function DashboardPage() {
+  const dbUser = user
+    ? await prisma.user.findUnique({ where: { supabaseUserId: user.id } })
+    : null;
+
+  // Weight data
+  const weightEntries = dbUser ? await getWeightEntries(dbUser.id) : [];
+  const weightStats = computeWeightStats(
+    weightEntries.map((e) => ({
+      ...e,
+      date: e.date.toISOString().split("T")[0],
+      createdAt: e.createdAt.toISOString(),
+    })),
+    dbUser?.startWeight ?? null
+  );
+
+  const serializedEntries = weightEntries.map((e) => ({
+    id: e.id,
+    userId: e.userId,
+    date: e.date.toISOString().split("T")[0],
+    weight: e.weight,
+    bodyFatPercent: e.bodyFatPercent,
+    status: e.status,
+    timeOfDay: e.timeOfDay,
+    notes: e.notes,
+    createdAt: e.createdAt.toISOString(),
+  }));
+
+  // Compute weekly change
+  const weeklyChange = (() => {
+    if (weightEntries.length < 2) return null;
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekAgoStr = weekAgo.toISOString().split("T")[0];
+
+    const recent = weightEntries[0]; // most recent (desc order)
+    const weekAgoEntry = weightEntries.find(
+      (e) => e.date.toISOString().split("T")[0] <= weekAgoStr
+    );
+    if (!weekAgoEntry) return null;
+    return Math.round((recent.weight - weekAgoEntry.weight) * 10) / 10;
+  })();
+
+  // Today's workout (placeholder until workout module is wired)
   const today = new Date();
+  const dayOfWeek = today.getDay(); // 0=Sun
+  const todayPlan = dbUser
+    ? await prisma.workoutPlan.findFirst({
+        where: {
+          userId: dbUser.id,
+          dayOfWeek: dayOfWeek === 0 ? 7 : dayOfWeek, // convert to 1=Mon
+          isActive: true,
+        },
+      })
+    : null;
+
   const formatted = today.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
   });
 
+  const TrendIcon =
+    weightStats.trend === "down"
+      ? TrendingDown
+      : weightStats.trend === "up"
+        ? TrendingUp
+        : Minus;
+
   return (
     <div className="space-y-6">
-      {/* ---------- Welcome header ---------- */}
+      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
         <p className="text-muted-foreground">{formatted}</p>
       </div>
 
-      {/* ---------- Quick stats row ---------- */}
+      {/* Quick stats */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {/* Current Weight */}
         <Card>
@@ -40,11 +111,20 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-foreground">325.3 lbs</p>
-            <p className="text-xs text-muted-foreground">
-              <TrendingDown className="mr-1 inline h-3 w-3" />
-              ↓ 1.4 lbs this week
+            <p className="text-2xl font-bold text-foreground">
+              {weightStats.currentWeight
+                ? `${weightStats.currentWeight.toFixed(1)} lbs`
+                : "\u2014"}
             </p>
+            {weeklyChange != null ? (
+              <p className="text-xs text-muted-foreground">
+                <TrendIcon className="mr-1 inline h-3 w-3" />
+                {weeklyChange > 0 ? "+" : ""}
+                {weeklyChange} lbs this week
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">No data yet</p>
+            )}
           </CardContent>
         </Card>
 
@@ -60,7 +140,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold text-foreground">
-              &mdash; / 2,874
+              &mdash; / {dbUser?.caloricTarget?.toLocaleString() ?? "2,874"}
             </p>
             <p className="text-xs text-muted-foreground">No entries yet</p>
           </CardContent>
@@ -71,16 +151,25 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Workout Status
+                Today&apos;s Workout
               </CardTitle>
               <Dumbbell className="h-4 w-4 text-muted-foreground" />
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-foreground">Rest Day</p>
-            <p className="text-xs text-muted-foreground">
-              Next: Upper A &mdash; Monday
-            </p>
+            {todayPlan ? (
+              <>
+                <p className="text-lg font-bold text-foreground leading-tight">
+                  {todayPlan.sessionName}
+                </p>
+                <p className="text-xs text-muted-foreground">Scheduled today</p>
+              </>
+            ) : (
+              <>
+                <p className="text-2xl font-bold text-foreground">Rest Day</p>
+                <p className="text-xs text-muted-foreground">No workout scheduled</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -101,50 +190,81 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ---------- Two-column section ---------- */}
+      {/* Two-column section */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* Weight Trend */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-foreground">Weight Trend</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-foreground">Weight Trend</CardTitle>
+              <Link
+                href="/weight"
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                View all &rarr;
+              </Link>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="flex h-48 items-center justify-center rounded-lg bg-muted/50">
-              <span className="text-muted-foreground">
-                Chart coming in Session 2
-              </span>
-            </div>
+            <DashboardWeightChart entries={serializedEntries} />
           </CardContent>
         </Card>
 
-        {/* This Week */}
+        {/* Today's Plan */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-foreground">This Week</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-foreground">
+                {todayPlan ? "Today\u2019s Plan" : "This Week"}
+              </CardTitle>
+              {todayPlan && (
+                <Link
+                  href="/workout"
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Start &rarr;
+                </Link>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="flex justify-between">
-              {days.map((day, i) => {
-                const isWeekday = i >= 1 && i <= 5;
-                return (
-                  <div
-                    key={i}
-                    className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
-                      isWeekday
-                        ? "bg-primary/20 text-primary"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {day}
-                  </div>
-                );
-              })}
-            </div>
+            {todayPlan ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  {todayPlan.sessionName}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Tap &ldquo;Start&rdquo; to begin logging your session
+                </p>
+              </div>
+            ) : (
+              <div className="flex justify-between">
+                {(["S", "M", "T", "W", "T", "F", "S"] as const).map(
+                  (day, i) => {
+                    const isTrainingDay = dbUser?.trainingDays?.includes(
+                      i === 0 ? 0 : i
+                    );
+                    return (
+                      <div
+                        key={i}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
+                          isTrainingDay
+                            ? "bg-primary/20 text-primary"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {day}
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* ---------- Quick actions row ---------- */}
+      {/* Quick actions */}
       <div className="grid grid-cols-3 gap-4">
         <Link href="/workout">
           <Card className="cursor-pointer transition hover:bg-accent">
